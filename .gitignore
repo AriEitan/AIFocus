@@ -1,0 +1,29 @@
+# Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.build/
+.vite/
+
+# Docker / data volumes (local persistence)
+data/
+**/data/
+**/chroma/
+**/*.sqlite3
+**/*.sqlite3-*
+uploads/
+**/uploads/
+
+# OS
+.DS_Store
