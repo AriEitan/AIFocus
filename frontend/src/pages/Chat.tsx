@@ -1,19 +1,43 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
 type Msg = { role: "user" | "assistant"; text: string };
+
+const STORAGE_KEY = "focusai_chat_v1";
 
 export default function Chat() {
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [status, setStatus] = useState<string>("");
 
+  // Load chat history once when the component mounts
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setMsgs(parsed);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Persist chat history whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(msgs));
+    } catch {
+      // ignore
+    }
+  }, [msgs]);
+
   const chips = useMemo(
     () => [
       "מה ההחלטות הכי חדשות בפרויקט?",
       "מה סטטוס המשימות נכון לתאריך הכי חדש?",
       "סכם לי את 3 המסמכים האחרונים",
-      "איפה יש סתירות בין מסמכים, ותעדיף את התאריך הכי חדש"
+      "איפה יש סתירות בין מסמכים, ותעדיף את התאריך הכי חדש",
     ],
     []
   );
@@ -54,6 +78,7 @@ export default function Chat() {
               key={c}
               className="text-xs bg-gray-100 border rounded-full px-3 py-1"
               onClick={() => send(c)}
+              type="button"
             >
               {c}
             </button>
@@ -64,7 +89,7 @@ export default function Chat() {
       <div className="bg-white border rounded-2xl p-3 shadow-sm space-y-2">
         {msgs.length === 0 && <div className="text-sm text-gray-500">שאל שאלה כדי להתחיל.</div>}
         {msgs.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "text-right" : "text-right"}>
+          <div key={i} className="text-right">
             <div
               className={
                 "inline-block whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm " +
@@ -78,17 +103,35 @@ export default function Chat() {
       </div>
 
       <div className="bg-white border rounded-2xl p-3 shadow-sm">
-        <div className="flex gap-2">
-          <input
-            className="flex-1 border rounded-xl px-3 py-2 text-sm"
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(input);
+          }}
+        >
+          <textarea
+            className="flex-1 border rounded-xl px-3 py-2 text-sm resize-none"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="כתוב שאלה..."
+            rows={2}
+            onKeyDown={(e) => {
+              // Enter sends, Shift+Enter inserts newline
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
           />
-          <button onClick={() => send(input)} className="bg-blue-600 text-white rounded-xl px-4 py-2 text-sm font-medium">
+          <button
+            type="submit"
+            className="bg-blue-600 text-white rounded-xl px-4 py-2 text-sm font-medium"
+          >
             שלח
           </button>
-        </div>
+        </form>
+
         {status && <div className="mt-2 text-xs text-gray-500">{status}</div>}
       </div>
     </div>

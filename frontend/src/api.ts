@@ -14,23 +14,19 @@ export type DocItem = {
 export type UploadIngestedItem = {
   name: string;
   id: number | string;
-  source: string;
-  date: string;
-  parsed: boolean;
-  embedded: "ok" | "disabled" | "failed";
-  error: string | null;
+  doc_date?: string;
+  source?: string;
+  source_kind?: string;
 };
 
 export type UploadResponse = {
   ok: boolean;
-  ingested: UploadIngestedItem[];
+  items: UploadIngestedItem[];
 };
 
 export type ChatResponse = {
-  mode: "openai" | "fallback";
-  openai_ok: boolean;
-  openai_error?: string;
   answer: string;
+  openai_ok: boolean;
   citations: { name: string; date: string }[];
 };
 
@@ -41,6 +37,19 @@ export type AdminStats = {
   email_attachments: number;
   emails_ingested_last_24h: number;
 };
+
+export type EmailStatus = {
+  ok: boolean | null;
+  last_attempt_utc: string | null;
+  last_success_utc: string | null;
+  last_error: string | null;
+  last_unseen_count: number | null;
+  last_ingested_count: number | null;
+};
+
+export type EmailPollNowResponse =
+  | { ok: true; unseen: number; ingested: number }
+  | { ok: false; error?: string };
 
 const API_BASE = "/api";
 const TOKEN_KEY = "token";
@@ -55,33 +64,29 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-async function requestAny(path: string, opts: RequestInit = {}): Promise<any> {
-  const token = getToken();
-  const headers: Record<string, string> = { ...(opts.headers as any) };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+function authHeaders(extra?: Record<string, string>) {
+  const t = getToken();
+  return {
+    ...(extra || {}),
+    ...(t ? { Authorization: `Bearer ${t}` } : {}),
+  };
+}
 
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+async function requestAny(path: string, init?: RequestInit): Promise<any> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: authHeaders(init?.headers as any),
+  });
 
-  const contentType = res.headers.get("content-type") || "";
-  const isJson = contentType.includes("application/json");
-
+  const text = await res.text();
   if (!res.ok) {
-    let body = "";
-    try {
-      body = isJson ? JSON.stringify(await res.json()) : await res.text();
-    } catch {
-      body = "";
-    }
-    throw new Error(body || `HTTP ${res.status}`);
+    throw new Error(text || `HTTP ${res.status}`);
   }
-
-  if (!isJson) {
-    const text = await res.text();
-    if (text.trim().startsWith("<")) throw new Error(text);
-    throw new Error("Non-JSON response from server");
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
-
-  return await res.json();
 }
 
 function normalizeDocs(data: any): DocItem[] {
@@ -119,7 +124,6 @@ export const api = {
     return normalizeDocs(data);
   },
 
-  // backward compatibility
   listDocs: async (): Promise<DocItem[]> => {
     const data = await requestAny("/admin/docs");
     return normalizeDocs(data);
@@ -134,6 +138,26 @@ export const api = {
       email_attachments: Number(data?.email_attachments || 0),
       emails_ingested_last_24h: Number(data?.emails_ingested_last_24h || 0),
     };
+  },
+
+  getEmailStatus: async (): Promise<EmailStatus> => {
+    const data: any = await requestAny("/admin/email/status");
+    return {
+      ok: (data?.ok ?? null) as any,
+      last_attempt_utc: data?.last_attempt_utc ?? null,
+      last_success_utc: data?.last_success_utc ?? null,
+      last_error: data?.last_error ?? null,
+      last_unseen_count: data?.last_unseen_count ?? null,
+      last_ingested_count: data?.last_ingested_count ?? null,
+    };
+  },
+
+  emailPollNow: async (): Promise<EmailPollNowResponse> => {
+    const data: any = await requestAny("/admin/email/poll-now", { method: "POST" });
+    if (data?.ok === true) {
+      return { ok: true, unseen: Number(data?.unseen || 0), ingested: Number(data?.ingested || 0) };
+    }
+    return { ok: false, error: data?.error || "poll failed" };
   },
 
   upload: async (files: File[]): Promise<UploadResponse> => {

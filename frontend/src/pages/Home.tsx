@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, DocItem, AdminStats } from "../api";
+import { api, DocItem, AdminStats, EmailStatus } from "../api";
 
 function extOf(name: string): string {
   const n = (name || "").toLowerCase().trim();
@@ -15,54 +15,66 @@ function typeBucket(ext: string): string {
   if (ext === "docx" || ext === "doc") return "DOCX";
   if (ext === "xlsx" || ext === "xls") return "XLSX";
   if (ext === "pptx" || ext === "ppt") return "PPTX";
-  if (ext === "msg") return "MSG";
-  if (ext === "eml") return "EML";
-  if (ext === "rtf") return "RTF";
-  if (ext === "csv") return "CSV";
-  if (ext === "txt") return "TXT";
-  if (ext === "md") return "MD";
-  if (ext === "json") return "JSON";
-  if (["png", "jpg", "jpeg", "webp", "gif", "tiff", "bmp", "heic", "heif"].includes(ext)) return "IMG";
-  if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) return "ZIP";
-  if (["dwg", "dxf"].includes(ext)) return "DWG";
-  if (ext === "no_ext") return "NO_EXT";
+  if (ext === "txt" || ext === "md") return "TEXT";
   return "OTHER";
 }
 
-function BarRow(props: { label: string; value: number; max: number }) {
-  const pct = props.max === 0 ? 0 : Math.round((props.value / props.max) * 100);
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-gray-700">
-        <div>{props.label}</div>
-        <div>{props.value}</div>
-      </div>
-      <div className="w-full bg-gray-200 rounded h-2">
-        <div className="bg-blue-600 h-2 rounded" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
+function fmtUtc(iso: string | null): string {
+  if (!iso) return "לא ידוע";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 export default function Home() {
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [stats, setStats] = useState<AdminStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [emailStatus, setEmailStatus] = useState<EmailStatus | null>(null);
+
+  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>("");
+
+  const [pollingNow, setPollingNow] = useState(false);
+  const [pollMsg, setPollMsg] = useState<string>("");
 
   const refresh = async () => {
     setLoading(true);
     setErr("");
     try {
-      const [items, s] = await Promise.all([api.getDocs(), api.getStats()]);
-      setDocs(Array.isArray(items) ? items : []);
-      setStats(s || null);
+      const [d, s, es] = await Promise.all([api.getDocs(), api.getStats(), api.getEmailStatus()]);
+      setDocs(d);
+      setStats(s);
+      setEmailStatus(es);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load dashboard");
-      setDocs([]);
-      setStats(null);
+      setErr(e?.message || "שגיאה");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const pollNow = async () => {
+    setPollingNow(true);
+    setPollMsg("");
+    try {
+      const res = await api.emailPollNow();
+      if (res.ok) {
+        if ((res.ingested || 0) > 0) {
+          setPollMsg(`נכנסו ${res.ingested} מיילים חדשים ונוספו למערכת.`);
+        } else {
+          setPollMsg("אין מיילים חדשים כרגע.");
+        }
+      } else {
+        setPollMsg(`בדיקה נכשלה. ${res.error || ""}`.trim());
+      }
+
+      await refresh();
+    } catch (e: any) {
+      setPollMsg(`בדיקה נכשלה. ${e?.message || "שגיאה"}`);
+    } finally {
+      setPollingNow(false);
     }
   };
 
@@ -71,38 +83,35 @@ export default function Home() {
   }, []);
 
   const computed = useMemo(() => {
-    const safeDocs = Array.isArray(docs) ? docs : [];
-
     const bySource: Record<string, number> = {};
     const byType: Record<string, number> = {};
     const byExtRaw: Record<string, number> = {};
 
-    for (const d of safeDocs) {
-      const src = (d?.source || "Unknown").toString();
+    let newest: DocItem | null = null;
+
+    for (const d of docs) {
+      const src = d.source || "Unknown";
       bySource[src] = (bySource[src] || 0) + 1;
 
-      const ext = extOf(d?.name || "");
+      const ext = extOf(d.name);
       byExtRaw[ext] = (byExtRaw[ext] || 0) + 1;
 
       const bucket = typeBucket(ext);
       byType[bucket] = (byType[bucket] || 0) + 1;
+
+      if (!newest) newest = d;
+      else {
+        const a = d.created_at || d.doc_date || "";
+        const b = newest.created_at || newest.doc_date || "";
+        if (a > b) newest = d;
+      }
     }
 
     const maxSource = Math.max(0, ...Object.values(bySource));
     const maxType = Math.max(0, ...Object.values(byType));
 
-    const newest = [...safeDocs]
-      .sort((a, b) => {
-        const ad = a?.doc_date || "";
-        const bd = b?.doc_date || "";
-        if (ad !== bd) return bd.localeCompare(ad);
-        const ac = a?.created_at || "";
-        const bc = b?.created_at || "";
-        return bc.localeCompare(ac);
-      })
-      .slice(0, 8);
+    const otherCount = (byType["OTHER"] || 0) + (byType["TEXT"] || 0);
 
-    const otherCount = byType["OTHER"] || 0;
     const topOtherExts = Object.entries(byExtRaw)
       .filter(([ext]) => typeBucket(ext) === "OTHER")
       .sort((a, b) => b[1] - a[1])
@@ -122,6 +131,17 @@ export default function Home() {
   const emailAttachments = stats?.email_attachments ?? 0;
   const emailsLast24 = stats?.emails_ingested_last_24h ?? 0;
 
+  const emailOk = emailStatus?.ok;
+  const emailBadge =
+    emailOk === true ? "תקין" :
+    emailOk === false ? "שגיאה" :
+    "לא ידוע";
+
+  const emailBadgeClass =
+    emailOk === true ? "bg-green-100 text-green-800 border-green-200" :
+    emailOk === false ? "bg-red-100 text-red-800 border-red-200" :
+    "bg-gray-100 text-gray-700 border-gray-200";
+
   return (
     <div className="p-4 space-y-4" dir="rtl">
       <div className="flex items-center justify-between">
@@ -137,98 +157,150 @@ export default function Home() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white border rounded-2xl p-3 shadow-sm">
-          <div className="text-xs text-gray-600">מסמכים סה״כ</div>
-          <div className="text-2xl font-bold">{totalDocs}</div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-3 shadow-sm">
-          <div className="text-xs text-gray-600">מיילים נותחו (סה״כ)</div>
-          <div className="text-2xl font-bold">{emailsBodies}</div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-3 shadow-sm">
-          <div className="text-xs text-gray-600">מיילים ב־24 שעות</div>
-          <div className="text-2xl font-bold">{emailsLast24}</div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-3 shadow-sm">
-          <div className="text-xs text-gray-600">מצב מערכת</div>
-          <div className="text-sm text-gray-800">{loading ? "טוען..." : "מוכן"}</div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white border rounded-2xl p-3 shadow-sm">
-          <div className="text-xs text-gray-600">קבצים שהועלו ידנית</div>
-          <div className="text-2xl font-bold">{uploadedManual}</div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-3 shadow-sm">
-          <div className="text-xs text-gray-600">קבצים שחולצו ממיילים</div>
-          <div className="text-2xl font-bold">{emailAttachments}</div>
-        </div>
-      </div>
-
-      <div className="bg-white border rounded-2xl p-3 shadow-sm space-y-3">
-        <div className="text-sm font-semibold">מקורות</div>
-        {sourceEntries.length === 0 ? (
-          <div className="text-sm text-gray-600">אין נתונים עדיין</div>
-        ) : (
-          <div className="space-y-3">
-            {sourceEntries
-              .sort((a, b) => b[1] - a[1])
-              .map(([k, v]) => <BarRow key={k} label={k} value={v} max={computed.maxSource} />)}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white border rounded-2xl p-3 shadow-sm space-y-3">
+      {/* Email status card */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-2">
         <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">סוגי קבצים</div>
-          <div className="text-xs text-gray-600">
-            OTHER: {computed.otherCount} | NO_EXT: {computed.noExtCount}
+          <div className="font-semibold">סטטוס חיבור מייל</div>
+          <span className={`text-xs px-2 py-1 border rounded-full ${emailBadgeClass}`}>
+            {emailBadge}
+          </span>
+        </div>
+
+        <div className="text-sm text-gray-700 space-y-1">
+          <div>
+            <span className="text-gray-500">ניסיון חיבור אחרון: </span>
+            <span>{fmtUtc(emailStatus?.last_attempt_utc || null)}</span>
+          </div>
+
+          <div>
+            <span className="text-gray-500">חיבור תקין אחרון: </span>
+            <span>{fmtUtc(emailStatus?.last_success_utc || null)}</span>
+          </div>
+
+          {emailStatus?.last_error && (
+            <div className="text-red-700">
+              <span className="text-gray-500">שגיאה אחרונה: </span>
+              <span className="whitespace-pre-wrap">{emailStatus.last_error}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            className="text-sm px-3 py-2 border rounded-xl"
+            onClick={pollNow}
+            disabled={pollingNow}
+          >
+            {pollingNow ? "בודק..." : "בדוק כעת"}
+          </button>
+          {pollMsg && <div className="text-sm text-gray-600">{pollMsg}</div>}
+        </div>
+      </div>
+
+      {/* Stats card */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm">
+        <div className="font-semibold mb-2">סיכום</div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+          <div className="border rounded-xl p-3">
+            <div className="text-gray-500">סה״כ מסמכים</div>
+            <div className="text-lg font-semibold">{totalDocs}</div>
+          </div>
+          <div className="border rounded-xl p-3">
+            <div className="text-gray-500">Upload</div>
+            <div className="text-lg font-semibold">{uploadedManual}</div>
+          </div>
+          <div className="border rounded-xl p-3">
+            <div className="text-gray-500">Email bodies</div>
+            <div className="text-lg font-semibold">{emailsBodies}</div>
+          </div>
+          <div className="border rounded-xl p-3">
+            <div className="text-gray-500">Email attachments</div>
+            <div className="text-lg font-semibold">{emailAttachments}</div>
+          </div>
+          <div className="border rounded-xl p-3">
+            <div className="text-gray-500">Emails ב-24h</div>
+            <div className="text-lg font-semibold">{emailsLast24}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Distributions */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-4">
+        <div className="font-semibold">פילוחים</div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <div className="text-sm text-gray-600 mb-2">לפי מקור</div>
+            <div className="space-y-2">
+              {sourceEntries.map(([k, v]) => (
+                <div key={k} className="flex items-center gap-2">
+                  <div className="w-28 text-sm">{k}</div>
+                  <div className="flex-1 h-2 bg-gray-100 rounded">
+                    <div
+                      className="h-2 bg-gray-700 rounded"
+                      style={{ width: computed.maxSource ? `${(v / computed.maxSource) * 100}%` : "0%" }}
+                    />
+                  </div>
+                  <div className="w-10 text-right text-sm">{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-sm text-gray-600 mb-2">לפי סוג קובץ</div>
+            <div className="space-y-2">
+              {typeEntries.map(([k, v]) => (
+                <div key={k} className="flex items-center gap-2">
+                  <div className="w-28 text-sm">{k}</div>
+                  <div className="flex-1 h-2 bg-gray-100 rounded">
+                    <div
+                      className="h-2 bg-gray-700 rounded"
+                      style={{ width: computed.maxType ? `${(v / computed.maxType) * 100}%` : "0%" }}
+                    />
+                  </div>
+                  <div className="w-10 text-right text-sm">{v}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {typeEntries.length === 0 ? (
-          <div className="text-sm text-gray-600">אין נתונים עדיין</div>
-        ) : (
-          <div className="space-y-3">
-            {typeEntries
-              .sort((a, b) => b[1] - a[1])
-              .map(([k, v]) => <BarRow key={k} label={k} value={v} max={computed.maxType} />)}
-          </div>
-        )}
-
-        {computed.otherCount > 0 && (
-          <div className="mt-2 text-xs text-gray-700">
-            <div className="font-semibold mb-1">סיומות שמסתתרות בתוך OTHER (Top):</div>
-            {computed.topOtherExts.length === 0 ? (
-              <div>אין</div>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {computed.topOtherExts.map(([ext, count]) => (
-                  <span key={ext} className="px-2 py-1 border rounded bg-gray-50">
-                    {ext}: {count}
-                  </span>
-                ))}
-              </div>
-            )}
+        {computed.topOtherExts.length > 0 && (
+          <div>
+            <div className="text-sm text-gray-600 mb-2">סיומות OTHER מובילות</div>
+            <div className="flex flex-wrap gap-2">
+              {computed.topOtherExts.map(([ext, c]) => (
+                <span key={ext} className="text-xs px-2 py-1 border rounded-full bg-gray-50">
+                  .{ext} ({c})
+                </span>
+              ))}
+              {computed.noExtCount > 0 && (
+                <span className="text-xs px-2 py-1 border rounded-full bg-gray-50">
+                  ללא סיומת ({computed.noExtCount})
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
 
-      <div className="bg-white border rounded-2xl p-3 shadow-sm space-y-3">
-        <div className="text-sm font-semibold">מסמכים אחרונים</div>
-        {computed.newest.length === 0 ? (
-          <div className="text-sm text-gray-600">עדיין אין מסמכים</div>
+      {/* Recent docs */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-semibold">מסמכים אחרונים</div>
+          <div className="text-xs text-gray-600">
+            {computed.newest ? `חדש ביותר: ${computed.newest.name}` : ""}
+          </div>
+        </div>
+
+        {docs.length === 0 ? (
+          <div className="text-sm text-gray-500">אין מסמכים עדיין.</div>
         ) : (
-          <div className="space-y-2">
-            {computed.newest.map((d) => (
-              <div key={String(d.id)} className="border rounded-xl p-2">
-                <div className="text-sm font-medium truncate" title={d.name}>
+          <div className="grid md:grid-cols-2 gap-3">
+            {docs.slice(0, 10).map((d) => (
+              <div key={String(d.id)} className="border rounded-xl p-3">
+                <div className="font-medium text-sm truncate" title={d.name}>
                   {d.name}
                 </div>
                 <div className="text-xs text-gray-600 flex justify-between">
