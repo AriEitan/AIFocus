@@ -10,6 +10,21 @@ from app.admin import router as admin_router
 from app.chat import router as chat_router
 from app.email_poller import start_email_poller_background
 
+import os
+from fastapi.middleware.cors import CORSMiddleware
+
+origins_raw = os.getenv("CORS_ORIGINS", "")
+allow_origins = [o.strip() for o in origins_raw.split(",") if o.strip()] or ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 app = FastAPI(title="FocusAI", version="0.1.0")
 
 app.add_middleware(
