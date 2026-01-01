@@ -37,6 +37,8 @@ def get_password_hash(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    if not hashed_password:
+        return False
     return pwd_context.verify(plain_password, hashed_password)
 
 
@@ -73,4 +75,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token(user.username)
-    return LoginResponse(ok=True, token=token, username=user.username, is_admin=user.is_admin)
+    is_admin = (getattr(user, "role", "user") == "admin")
+
+    return LoginResponse(
+        ok=True,
+        token=token,
+        username=user.username,
+        is_admin=is_admin,
+    )
