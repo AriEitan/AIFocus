@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -10,26 +12,19 @@ from app.admin import router as admin_router
 from app.chat import router as chat_router
 from app.email_poller import start_email_poller_background
 
-import os
-from fastapi.middleware.cors import CORSMiddleware
 
-origins_raw = os.getenv("CORS_ORIGINS", "")
-allow_origins = [o.strip() for o in origins_raw.split(",") if o.strip()] or ["*"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def _parse_origins() -> list[str]:
+    origins_raw = os.getenv("CORS_ORIGINS", "")
+    allow_origins = [o.strip() for o in origins_raw.split(",") if o.strip()]
+    return allow_origins or ["*"]
 
 
 app = FastAPI(title="FocusAI", version="0.1.0")
 
+# CORS middleware (once)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,12 +39,12 @@ def _ensure_users_role_column() -> None:
 
         if "role" not in col_names:
             try:
-                # safer default: user
-                db.execute(text("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"))
+                db.execute(
+                    text("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+                )
                 db.commit()
                 print("[INFO] DB migration: added users.role (default=user)", flush=True)
             except Exception as e:
-                # race condition safe: if another process added it first
                 msg = str(e).lower()
                 if "duplicate" in msg or "already exists" in msg:
                     pass
@@ -73,7 +68,6 @@ def ensure_default_admin_local() -> None:
             db.commit()
             print("[INFO] Created default admin user admin/admin", flush=True)
         else:
-            # ensure role is admin
             if getattr(admin, "role", None) != "admin":
                 admin.role = "admin"
                 db.commit()
@@ -94,7 +88,8 @@ def on_startup() -> None:
     ensure_default_admin_local()
 
     # Start email poller in background
-    start_email_poller_background(interval_seconds=300)
+    interval = int(os.getenv("EMAIL_POLL_INTERVAL_SECONDS", "300"))
+    start_email_poller_background(interval_seconds=interval)
 
 
 @app.get("/api/health")
