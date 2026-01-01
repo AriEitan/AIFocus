@@ -2,11 +2,9 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-# Install deps
 COPY package*.json ./
 RUN npm ci
 
-# Copy source and build
 COPY . .
 RUN npm run build
 
@@ -14,11 +12,10 @@ RUN npm run build
 FROM nginx:alpine
 RUN apk add --no-cache gettext
 
-# Static files
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # Nginx template
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 
-# Listen on Railway $PORT
-CMD ["/bin/sh", "-c", "envsubst '$PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+# Railway provides $PORT dynamically
+CMD ["/bin/sh", "-c", "envsubst '$PORT $BACKEND_URL' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
