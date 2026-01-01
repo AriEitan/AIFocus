@@ -78,18 +78,16 @@ def ensure_default_admin_local() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    # Ensure base tables exist
     Base.metadata.create_all(bind=engine)
-
-    # Run migrations BEFORE querying models
     _ensure_users_role_column()
-
-    # Ensure default admin exists
     ensure_default_admin_local()
 
-    # Start email poller in background
-    interval = int(os.getenv("EMAIL_POLL_INTERVAL_SECONDS", "300"))
-    start_email_poller_background(interval_seconds=interval)
+    enable_poller = os.getenv("ENABLE_EMAIL_POLLER", "true").lower() == "true"
+    if enable_poller:
+        interval = int(os.getenv("EMAIL_POLL_INTERVAL_SECONDS", "300"))
+        start_email_poller_background(interval_seconds=interval)
+    else:
+        print("[INFO] Email Poller disabled by ENABLE_EMAIL_POLLER=false", flush=True)
 
 
 @app.get("/api/health")
