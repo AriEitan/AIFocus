@@ -13,12 +13,12 @@ export default defineConfig({
     host: true,
     port: 5173,
     allowedHosts: [
-      'aifocus-production.up.railway.app'
+      'all'
     ]
   },
   preview: {
     allowedHosts: [
-      'aifocus-production.up.railway.app'
+      'all'
     ]
   }
 })
