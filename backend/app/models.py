@@ -14,6 +14,10 @@ class User(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    @property
+    def is_admin(self) -> bool:
+        return (self.role or "user") == "admin"
+
 
 class Document(Base):
     __tablename__ = "documents"

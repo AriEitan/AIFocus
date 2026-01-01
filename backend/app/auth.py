@@ -75,11 +75,4 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token(user.username)
-    is_admin = (getattr(user, "role", "user") == "admin")
-
-    return LoginResponse(
-        ok=True,
-        token=token,
-        username=user.username,
-        is_admin=is_admin,
-    )
+    return LoginResponse(ok=True, token=token, username=user.username, is_admin=user.is_admin)
